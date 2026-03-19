@@ -437,7 +437,7 @@ export default function BistPage() {
                     Veri bulunamadı
                   </div>
                   <div className="text-xs" style={{ color: "oklch(0.40 0.010 250)", fontFamily: "'Space Grotesk', sans-serif" }}>
-                    CollectAPI anahtarını kontrol edin veya sunucuyu yeniden başlatın
+                    VITE_TWELVE_DATA_KEY ortam değişkenini Vercel'de tanımlayın
                   </div>
                 </div>
               </div>

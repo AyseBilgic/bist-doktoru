@@ -84,8 +84,7 @@ async function fetchGoldFromCdn(): Promise<GoldItem[] | null> {
   }
 }
 
-// Yahoo Finance'den BIST hisse verisi (tarayıcı fallback)
-const BIST_YF_SYMBOLS = [
+const BIST_SYMBOLS = [
   "THYAO","GARAN","ASELS","EREGL","KCHOL","SISE","AKBNK","YKBNK","TUPRS","BIMAS",
   "FROTO","TOASO","PETKM","PGSUS","VESTL","KOZAL","TCELL","ENKAI","SAHOL","ISCTR",
   "ARCLK","KOZAA","MGROS","EKGYO","AEFES","TTKOM","DOHOL","HEKTS","ODAS","OYAKC",
@@ -99,48 +98,61 @@ function fmtHacim(v: number): string {
   return String(v);
 }
 
-async function fetchStocksFromYahoo(): Promise<StockItem[] | null> {
+// ─── Twelve Data — tarayıcıdan direkt çağrı ───────────────────────────────
+// Vercel'de VITE_TWELVE_DATA_KEY env var olarak ayarla; yoksa inline key kullanılır
+const TD_KEY = (import.meta.env.VITE_TWELVE_DATA_KEY as string | undefined) || "a9ee562223e34aa59be0ae4075b10085";
+const TD_BASE = "https://api.twelvedata.com";
+
+async function fetchStocksFromTwelveData(): Promise<StockItem[] | null> {
+  if (!TD_KEY) return null;
   try {
-    const syms = BIST_YF_SYMBOLS.map((s) => `${s}.IS`).join(",");
-    const target = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${syms}&lang=tr&region=TR`;
-    const res = await fetchWithTimeout(`https://corsproxy.io/?${encodeURIComponent(target)}`, 7000);
+    const url = `${TD_BASE}/quote?symbol=${BIST_SYMBOLS.join(",")}&exchange=BIST&apikey=${TD_KEY}`;
+    const res = await fetchWithTimeout(url, 10_000);
     if (!res.ok) return null;
     const json = await res.json();
-    const quotes: any[] = json?.quoteResponse?.result ?? [];
-    if (quotes.length === 0) return null;
-    return quotes.map((q) => ({
-      code: String(q.symbol).replace(".IS", ""),
-      text: q.longName || q.shortName || q.symbol,
-      lastprice: q.regularMarketPrice ?? 0,
-      lastpricestr: (q.regularMarketPrice ?? 0).toFixed(2),
-      rate: q.regularMarketChangePercent ?? 0,
-      hacim: q.regularMarketVolume ?? 0,
-      hacimstr: fmtHacim(q.regularMarketVolume ?? 0),
-    }));
+    // Twelve Data hata objelerini filtrele (code alanı varsa hata)
+    const result = BIST_SYMBOLS
+      .filter((sym) => json[sym] && !json[sym].code)
+      .map((sym) => {
+        const q = json[sym];
+        const price = parseFloat(q.close)          || 0;
+        const pct   = parseFloat(q.percent_change) || 0;
+        const vol   = parseInt(q.volume, 10)       || 0;
+        return {
+          code:         sym,
+          text:         q.name || sym,
+          lastprice:    price,
+          lastpricestr: price.toFixed(2),
+          rate:         pct,
+          hacim:        vol,
+          hacimstr:     fmtHacim(vol),
+        };
+      });
+    return result.length > 0 ? result : null;
   } catch {
     return null;
   }
 }
 
-async function fetchBistFromYahoo(): Promise<BistIndex | null> {
+async function fetchBistFromTwelveData(): Promise<BistIndex | null> {
+  if (!TD_KEY) return null;
   try {
-    const target = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=XU100.IS&lang=tr&region=TR`;
-    const res = await fetchWithTimeout(`https://corsproxy.io/?${encodeURIComponent(target)}`, 7000);
+    const url = `${TD_BASE}/quote?symbol=XU100&exchange=BIST&apikey=${TD_KEY}`;
+    const res = await fetchWithTimeout(url, 8_000);
     if (!res.ok) return null;
-    const json = await res.json();
-    const q = json?.quoteResponse?.result?.[0];
-    if (!q) return null;
-    const current = q.regularMarketPrice ?? 0;
-    const changerate = q.regularMarketChangePercent ?? 0;
+    const q = await res.json();
+    if (q.code) return null; // hata objesi
+    const current    = parseFloat(q.close) || 0;
+    const changerate = parseFloat(q.percent_change) || 0;
     return {
       current,
-      currentstr: current.toLocaleString("tr-TR", { maximumFractionDigits: 2 }),
+      currentstr:    current.toLocaleString("tr-TR", { maximumFractionDigits: 2 }),
       changerate,
       changeratestr: Math.abs(changerate).toFixed(2),
-      min: q.regularMarketDayLow ?? 0,
-      minstr: (q.regularMarketDayLow ?? 0).toLocaleString("tr-TR", { maximumFractionDigits: 2 }),
-      max: q.regularMarketDayHigh ?? 0,
-      maxstr: (q.regularMarketDayHigh ?? 0).toLocaleString("tr-TR", { maximumFractionDigits: 2 }),
+      min:    parseFloat(q.low)  || 0,
+      minstr: (parseFloat(q.low) || 0).toLocaleString("tr-TR", { maximumFractionDigits: 2 }),
+      max:    parseFloat(q.high) || 0,
+      maxstr: (parseFloat(q.high) || 0).toLocaleString("tr-TR", { maximumFractionDigits: 2 }),
     };
   } catch {
     return null;
@@ -149,23 +161,21 @@ async function fetchBistFromYahoo(): Promise<BistIndex | null> {
 
 export const fetchCurrency = () => apiFetch<CurrencyItem[]>("/api/currency");
 
-// Önce sunucu (CollectAPI), başarısız olursa ücretsiz CDN
 export const fetchGold = async (): Promise<GoldItem[] | null> => {
   const fromServer = await apiFetch<GoldItem[]>("/api/gold");
   if (fromServer) return fromServer;
   return fetchGoldFromCdn();
 };
 
-// Önce sunucu (CollectAPI → Yahoo Finance), başarısız olursa tarayıcıdan Yahoo Finance
+// Öncelik: sunucu → Twelve Data (tarayıcı) → Yahoo Finance
 export const fetchStocks = async (): Promise<StockItem[] | null> => {
   const fromServer = await apiFetch<StockItem[]>("/api/stocks");
   if (fromServer) return fromServer;
-  return fetchStocksFromYahoo();
+  return fetchStocksFromTwelveData();
 };
 
-// Önce sunucu, başarısız olursa tarayıcıdan Yahoo Finance
 export const fetchBist = async (): Promise<BistIndex | null> => {
   const fromServer = await apiFetch<BistIndex>("/api/bist");
   if (fromServer) return fromServer;
-  return fetchBistFromYahoo();
+  return fetchBistFromTwelveData();
 };
