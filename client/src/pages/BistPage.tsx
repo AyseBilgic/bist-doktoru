@@ -1,14 +1,17 @@
 /**
- * BIST Doktoru - BIST Hisse Senetleri Sayfası
- * CollectAPI canlı hisse verileri + TradingView grafikleri
+ * BIST Doktoru — BIST Hisse Senetleri
+ * Bloomberg terminal tarzı, anlık CollectAPI verisi odaklı tasarım
  */
 import { useState, useMemo, useEffect } from "react";
-import { BarChart2, ChevronUp, ChevronDown } from "lucide-react";
+import {
+  BarChart2, ChevronUp, ChevronDown, Search,
+  TrendingUp, TrendingDown, Activity, Clock,
+} from "lucide-react";
 import TradingViewWidget from "@/components/TradingViewWidget";
-import { useStocks, useBist, useGold } from "@/hooks/useMarketData";
+import { useStocks, useBist } from "@/hooks/useMarketData";
 
-// Sektör eşleştirme (CollectAPI sadece kod verir, sektörü text'ten tahmin ederiz)
-const SECTOR_KEYWORDS: Record<string, string> = {
+// ─── Sektör eşleştirme ──────────────────────────────────────────────────────
+const SECTOR_MAP: Record<string, string> = {
   BANKA: "Bankacılık", FINANS: "Bankacılık", KREDI: "Bankacılık",
   HAVA: "Ulaşım", PEGASUS: "Ulaşım", TASIMACILIK: "Ulaşım",
   DEMIR: "Metal", CELIK: "Metal", ALUM: "Metal",
@@ -21,342 +24,438 @@ const SECTOR_KEYWORDS: Record<string, string> = {
 };
 
 function getSector(text: string): string {
-  const upper = text.toUpperCase();
-  for (const [keyword, sector] of Object.entries(SECTOR_KEYWORDS)) {
-    if (upper.includes(keyword)) return sector;
+  const up = text.toUpperCase();
+  for (const [kw, s] of Object.entries(SECTOR_MAP)) {
+    if (up.includes(kw)) return s;
   }
   return "Diğer";
 }
 
-const SECTORS = ["Tümü", "Bankacılık", "Holding", "Ulaşım", "Savunma", "Metal", "Enerji", "Otomotiv", "Perakende", "Telekomünikasyon", "Diğer"];
+const SECTORS = [
+  "Tümü", "Bankacılık", "Holding", "Ulaşım", "Savunma",
+  "Metal", "Enerji", "Otomotiv", "Perakende", "Telekomünikasyon", "Diğer",
+];
 
+type SortKey = "rate" | "price" | "hacim";
+type TabKey = "tumu" | "kazanan" | "kaybeden";
+
+// ─── Renk yardımcısı ────────────────────────────────────────────────────────
+const rateColor = (r: number) =>
+  r > 0 ? "oklch(0.70 0.18 160)" : r < 0 ? "oklch(0.60 0.22 25)" : "oklch(0.50 0.010 250)";
+
+// ─── Ana Bileşen ─────────────────────────────────────────────────────────────
 export default function BistPage() {
-  const [selectedStock, setSelectedStock] = useState("BIST:THYAO");
   const [selectedSymbol, setSelectedSymbol] = useState("THYAO");
   const [selectedSector, setSelectedSector] = useState("Tümü");
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<SortKey>("rate");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [tab, setTab] = useState<TabKey>("tumu");
+  const [now, setNow] = useState(new Date());
 
   const { data: stocks, loading } = useStocks();
   const { data: bist } = useBist();
-  const { data: gold } = useGold();
 
-  const enrichedStocks = useMemo(() => {
-    if (!stocks) return [];
-    return stocks.map((s) => ({
-      ...s,
-      sector: getSector(s.text),
-    }));
-  }, [stocks]);
-
-  const filteredStocks = useMemo(() => {
-    return enrichedStocks.filter((s) => {
-      const matchSector = selectedSector === "Tümü" || s.sector === selectedSector;
-      return matchSector;
-    });
-  }, [enrichedStocks, selectedSector]);
-
-  // Sektör filtresi değişince ilk hisseyi TradingView'a yansıt
+  // Saat güncellemesi (30s)
   useEffect(() => {
-    if (filteredStocks.length > 0) {
-      setSelectedStock(`BIST:${filteredStocks[0].code}`);
-      setSelectedSymbol(filteredStocks[0].code);
+    const t = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Sektör bilgisi ekle
+  const enriched = useMemo(
+    () => (stocks ?? []).map((s) => ({ ...s, sector: getSector(s.text) })),
+    [stocks]
+  );
+
+  // Piyasa genişliği (kaç hisse yükseldi/düştü)
+  const breadth = useMemo(() => {
+    const up   = enriched.filter((s) => s.rate > 0).length;
+    const down = enriched.filter((s) => s.rate < 0).length;
+    const flat = enriched.filter((s) => s.rate === 0).length;
+    return { up, down, flat, total: enriched.length };
+  }, [enriched]);
+
+  // Top 5 kazanan / kaybeden
+  const topGainers = useMemo(
+    () => [...enriched].sort((a, b) => b.rate - a.rate).slice(0, 5),
+    [enriched]
+  );
+  const topLosers = useMemo(
+    () => [...enriched].sort((a, b) => a.rate - b.rate).slice(0, 5),
+    [enriched]
+  );
+
+  // Filtre + arama + sıralama
+  const displayed = useMemo(() => {
+    let list = enriched;
+    if (tab === "kazanan") list = list.filter((s) => s.rate > 0);
+    else if (tab === "kaybeden") list = list.filter((s) => s.rate < 0);
+    if (selectedSector !== "Tümü") list = list.filter((s) => s.sector === selectedSector);
+    if (search.trim()) {
+      const q = search.trim().toUpperCase();
+      list = list.filter((s) => s.code.includes(q) || s.text.toUpperCase().includes(q));
     }
-  }, [selectedSector]);
+    return [...list].sort((a, b) => {
+      const va = a[sortBy === "rate" ? "rate" : sortBy === "price" ? "lastprice" : "hacim"];
+      const vb = b[sortBy === "rate" ? "rate" : sortBy === "price" ? "lastprice" : "hacim"];
+      return sortDir === "desc" ? vb - va : va - vb;
+    });
+  }, [enriched, tab, selectedSector, search, sortBy, sortDir]);
+
+  const selectedStock = enriched.find((s) => s.code === selectedSymbol) ?? null;
+
+  // Sektör / tab değişince ilk hisseyi seç
+  useEffect(() => {
+    if (displayed.length > 0) setSelectedSymbol(displayed[0].code);
+  }, [selectedSector, tab]);
+
+  const handleSort = (key: SortKey) => {
+    if (sortBy === key) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    else { setSortBy(key); setSortDir("desc"); }
+  };
+
+  const SortBtn = ({ label, k }: { label: string; k: SortKey }) => (
+    <button
+      onClick={() => handleSort(k)}
+      className="flex items-center gap-0.5 transition-colors"
+      style={{ color: sortBy === k ? "oklch(0.65 0.20 220)" : "oklch(0.45 0.010 250)", fontFamily: "'Space Grotesk', sans-serif" }}
+    >
+      {label}
+      {sortBy === k && <span className="ml-0.5">{sortDir === "desc" ? "↓" : "↑"}</span>}
+    </button>
+  );
 
   return (
-    <div className="min-h-screen">
-      {/* Page Header */}
+    <div className="flex flex-col" style={{ height: "calc(100vh - 46px)", background: "oklch(0.08 0.015 250)" }}>
+
+      {/* ═══ HEADER: BIST 100 + Piyasa Genişliği ═══════════════════════════ */}
       <div
-        className="px-6 py-5 border-b"
+        className="flex-shrink-0 px-5 py-3 border-b flex flex-wrap items-center gap-x-6 gap-y-2"
         style={{ borderColor: "oklch(0.18 0.012 250)", background: "oklch(0.10 0.015 250)" }}
       >
-        <div className="flex items-center gap-3 mb-1">
-          <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center"
-            style={{ background: "oklch(0.65 0.20 220 / 0.15)" }}
-          >
+        {/* İkon + Başlık */}
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+            style={{ background: "oklch(0.65 0.20 220 / 0.15)" }}>
             <BarChart2 className="w-4 h-4" style={{ color: "oklch(0.65 0.20 220)" }} />
           </div>
-          <h1 className="text-xl font-bold" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "oklch(0.95 0.005 250)" }}>
-            BIST Hisse Senetleri
-          </h1>
+          <span className="font-bold text-sm" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "oklch(0.65 0.20 220)" }}>
+            BIST 100
+          </span>
         </div>
-        <p className="text-sm ml-11" style={{ color: "oklch(0.55 0.010 250)" }}>
-          Borsa İstanbul'daki tüm hisse senetlerini canlı TradingView grafikleriyle takip edin
-        </p>
+
+        {/* Endeks Değeri */}
+        {bist ? (
+          <div className="flex items-baseline gap-3">
+            <span className="text-2xl font-bold font-mono"
+              style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.95 0.005 250)" }}>
+              {bist.currentstr}
+            </span>
+            <span className="flex items-center gap-0.5 text-base font-mono font-bold"
+              style={{ fontFamily: "'JetBrains Mono', monospace", color: rateColor(bist.changerate) }}>
+              {bist.changerate >= 0 ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              {bist.changerate >= 0 ? "+" : ""}{bist.changeratestr}%
+            </span>
+            <span className="text-xs" style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.45 0.010 250)" }}>
+              Min {bist.minstr} · Max {bist.maxstr}
+            </span>
+          </div>
+        ) : (
+          <div className="h-7 w-32 rounded animate-pulse" style={{ background: "oklch(0.15 0.012 250)" }} />
+        )}
+
+        {/* Piyasa Genişliği */}
+        {breadth.total > 0 && (
+          <div className="flex items-center gap-3 ml-auto">
+            <div className="flex items-center gap-2 text-xs" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+              <span className="flex items-center gap-1" style={{ color: "oklch(0.70 0.18 160)" }}>
+                <TrendingUp className="w-3.5 h-3.5" />
+                <strong>{breadth.up}</strong> yükseliyor
+              </span>
+              <span style={{ color: "oklch(0.25 0.010 250)" }}>|</span>
+              <span className="flex items-center gap-1" style={{ color: "oklch(0.60 0.22 25)" }}>
+                <TrendingDown className="w-3.5 h-3.5" />
+                <strong>{breadth.down}</strong> düşüyor
+              </span>
+              <span style={{ color: "oklch(0.25 0.010 250)" }}>|</span>
+              <span style={{ color: "oklch(0.45 0.010 250)" }}>{breadth.flat} değişmez</span>
+            </div>
+            {/* Breadth bar */}
+            <div className="w-28 h-2.5 rounded-full overflow-hidden flex"
+              style={{ background: "oklch(0.18 0.012 250)", flexShrink: 0 }}>
+              <div style={{ width: `${(breadth.up / breadth.total) * 100}%`, background: "oklch(0.70 0.18 160)", transition: "width 1s" }} />
+              <div style={{ width: `${(breadth.flat / breadth.total) * 100}%`, background: "oklch(0.30 0.010 250)" }} />
+              <div style={{ width: `${(breadth.down / breadth.total) * 100}%`, background: "oklch(0.60 0.22 25)" }} />
+            </div>
+          </div>
+        )}
+
+        {/* Saat */}
+        <div className="flex items-center gap-1.5 text-xs flex-shrink-0"
+          style={{ color: "oklch(0.40 0.010 250)", fontFamily: "'JetBrains Mono', monospace" }}>
+          <Clock className="w-3 h-3" />
+          {now.toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Istanbul" })}
+        </div>
       </div>
 
-      <div className="p-6">
-        {/* BIST 100 Index - Canlı */}
-        {bist && (
-          <div
-            className="mb-6 p-4 rounded-xl flex items-center gap-6 flex-wrap"
-            style={{ background: "oklch(0.12 0.015 250)", border: "1px solid oklch(0.20 0.012 250)" }}
-          >
-            <div>
-              <div className="text-xs mb-0.5" style={{ color: "oklch(0.55 0.010 250)", fontFamily: "'Space Grotesk', sans-serif" }}>
-                BIST 100 Endeksi
-              </div>
-              <div className="font-mono text-2xl font-bold" style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.95 0.005 250)" }}>
-                {bist.currentstr}
-              </div>
-            </div>
-            <div
-              className="flex items-center gap-1 text-lg font-mono font-bold"
-              style={{
-                fontFamily: "'JetBrains Mono', monospace",
-                color: bist.changerate >= 0 ? "oklch(0.70 0.18 160)" : "oklch(0.60 0.22 25)",
-              }}
-            >
-              {bist.changerate >= 0 ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-              {bist.changerate >= 0 ? "+" : ""}{bist.changeratestr}%
-            </div>
-            <div className="flex gap-4 text-xs ml-auto" style={{ color: "oklch(0.55 0.010 250)", fontFamily: "'JetBrains Mono', monospace" }}>
-              <span>Min: {bist.minstr}</span>
-              <span>Max: {bist.maxstr}</span>
-            </div>
-          </div>
-        )}
+      {/* ═══ EN ÇOKLAR / EN AZLAR BANDI ════════════════════════════════════ */}
+      {!loading && enriched.length > 0 && (
+        <div className="flex-shrink-0 px-5 py-2 border-b flex items-center gap-4 overflow-x-auto"
+          style={{ borderColor: "oklch(0.14 0.012 250)", background: "oklch(0.09 0.013 250)" }}>
+          <span className="text-xs font-semibold flex-shrink-0"
+            style={{ color: "oklch(0.70 0.18 160)", fontFamily: "'Space Grotesk', sans-serif", letterSpacing: "0.05em" }}>
+            EN ÇOKLAR
+          </span>
+          {topGainers.map((s) => (
+            <button key={s.code}
+              onClick={() => setSelectedSymbol(s.code)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md flex-shrink-0 transition-all"
+              style={{ background: "oklch(0.70 0.18 160 / 0.08)", border: "1px solid oklch(0.70 0.18 160 / 0.20)" }}>
+              <span className="font-bold text-xs" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "oklch(0.92 0.005 250)" }}>{s.code}</span>
+              <span className="font-mono text-xs" style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.70 0.18 160)" }}>+{s.rate.toFixed(2)}%</span>
+            </button>
+          ))}
 
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-          {/* Sol: Hisse Listesi (CollectAPI) */}
-          <div className="xl:col-span-1">
-            {/* Filtre */}
-            <div className="mb-4">
-              <div className="flex gap-2 flex-wrap">
-                {SECTORS.slice(0, 6).map((sector) => (
-                  <button
-                    key={sector}
-                    onClick={() => setSelectedSector(sector)}
-                    className="px-2.5 py-1 rounded text-xs font-medium transition-all"
-                    style={{
-                      background: selectedSector === sector ? "oklch(0.65 0.20 220 / 0.2)" : "oklch(0.14 0.015 250)",
-                      border: `1px solid ${selectedSector === sector ? "oklch(0.65 0.20 220 / 0.4)" : "oklch(0.22 0.012 250)"}`,
-                      color: selectedSector === sector ? "oklch(0.65 0.20 220)" : "oklch(0.60 0.010 250)",
-                      fontFamily: "'Space Grotesk', sans-serif",
-                    }}
-                  >
-                    {sector}
-                  </button>
-                ))}
-              </div>
-            </div>
+          <div className="w-px h-4 flex-shrink-0 mx-1" style={{ background: "oklch(0.22 0.012 250)" }} />
 
-            {/* Hisse Listesi */}
-            <div
-              className="rounded-xl overflow-hidden"
-              style={{ border: "1px solid oklch(0.20 0.012 250)", background: "oklch(0.11 0.015 250)" }}
-            >
-              <div
-                className="grid grid-cols-3 px-4 py-2 text-xs font-medium"
-                style={{ color: "oklch(0.50 0.010 250)", borderBottom: "1px solid oklch(0.17 0.012 250)", fontFamily: "'Space Grotesk', sans-serif" }}
-              >
-                <span>Hisse</span>
-                <span className="text-right">Fiyat</span>
-                <span className="text-right">Değişim</span>
-              </div>
-              <div className="overflow-y-auto" style={{ maxHeight: "480px" }}>
-                {loading && (
-                  <div className="px-4 py-6 text-center">
-                    <span className="text-xs animate-pulse" style={{ color: "oklch(0.50 0.010 250)" }}>Hisse verileri yükleniyor...</span>
-                  </div>
-                )}
-                {!loading && filteredStocks.length === 0 && (
-                  <div className="px-4 py-6 text-center">
-                    <span className="text-xs" style={{ color: "oklch(0.50 0.010 250)" }}>Sonuç bulunamadı</span>
-                  </div>
-                )}
-                {filteredStocks.map((stock, i) => {
-                  const up = stock.rate >= 0;
-                  return (
-                    <div
-                      key={stock.code}
-                      className="grid grid-cols-3 px-4 py-3 cursor-pointer transition-all duration-150"
-                      style={{
-                        borderBottom: i < filteredStocks.length - 1 ? "1px solid oklch(0.15 0.012 250)" : "none",
-                        background: selectedSymbol === stock.code ? "oklch(0.65 0.20 220 / 0.08)" : "transparent",
-                      }}
-                      onClick={() => {
-                        setSelectedStock(`BIST:${stock.code}`);
-                        setSelectedSymbol(stock.code);
-                      }}
-                    >
-                      <div>
-                        <div
-                          className="font-bold text-xs"
-                          style={{
-                            fontFamily: "'Space Grotesk', sans-serif",
-                            color: selectedSymbol === stock.code ? "oklch(0.65 0.20 220)" : "oklch(0.90 0.005 250)",
-                          }}
-                        >
-                          {stock.code}
-                        </div>
-                        <div className="text-xs" style={{ color: "oklch(0.45 0.010 250)" }}>
-                          {stock.sector}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-mono text-xs" style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.88 0.005 250)" }}>
-                          ₺{stock.lastpricestr}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div
-                          className="flex items-center justify-end gap-0.5 text-xs font-mono"
-                          style={{
-                            fontFamily: "'JetBrains Mono', monospace",
-                            color: up ? "oklch(0.70 0.18 160)" : "oklch(0.60 0.22 25)",
-                          }}
-                        >
-                          {up ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                          {up ? "+" : ""}{stock.rate.toFixed(2)}%
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+          <span className="text-xs font-semibold flex-shrink-0"
+            style={{ color: "oklch(0.60 0.22 25)", fontFamily: "'Space Grotesk', sans-serif", letterSpacing: "0.05em" }}>
+            EN AZLAR
+          </span>
+          {topLosers.map((s) => (
+            <button key={s.code}
+              onClick={() => setSelectedSymbol(s.code)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md flex-shrink-0 transition-all"
+              style={{ background: "oklch(0.60 0.22 25 / 0.08)", border: "1px solid oklch(0.60 0.22 25 / 0.20)" }}>
+              <span className="font-bold text-xs" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "oklch(0.92 0.005 250)" }}>{s.code}</span>
+              <span className="font-mono text-xs" style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.60 0.22 25)" }}>{s.rate.toFixed(2)}%</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ═══ ANA İÇERİK: SOL LİSTE + SAĞ GRAFİK ═══════════════════════════ */}
+      <div className="flex flex-1 min-h-0">
+
+        {/* ── Sol: Hisse Listesi ─────────────────────────────────────────── */}
+        <div className="flex flex-col border-r flex-shrink-0"
+          style={{ width: "300px", borderColor: "oklch(0.16 0.012 250)", background: "oklch(0.09 0.013 250)" }}>
+
+          {/* Arama */}
+          <div className="p-2.5 border-b" style={{ borderColor: "oklch(0.14 0.012 250)" }}>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5"
+                style={{ color: "oklch(0.40 0.010 250)" }} />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Kod veya şirket ara..."
+                className="w-full pl-8 pr-3 py-1.5 rounded-lg text-xs outline-none"
+                style={{
+                  background: "oklch(0.13 0.015 250)",
+                  border: "1px solid oklch(0.20 0.012 250)",
+                  color: "oklch(0.88 0.005 250)",
+                  fontFamily: "'Space Grotesk', sans-serif",
+                }}
+              />
             </div>
           </div>
 
-          {/* Sağ: TradingView Grafik */}
-          <div className="xl:col-span-2 space-y-4">
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="font-bold" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "oklch(0.90 0.005 250)" }}>
-                  {selectedSymbol} — Teknik Analiz Grafiği
-                </h2>
+          {/* Sekmeler */}
+          <div className="flex border-b" style={{ borderColor: "oklch(0.14 0.012 250)" }}>
+            {([
+              { k: "tumu",     label: "Tümü" },
+              { k: "kazanan",  label: "▲ Yükselen" },
+              { k: "kaybeden", label: "▼ Düşen" },
+            ] as { k: TabKey; label: string }[]).map(({ k, label }) => (
+              <button key={k} onClick={() => setTab(k)}
+                className="flex-1 py-2 text-xs font-medium transition-all"
+                style={{
+                  fontFamily: "'Space Grotesk', sans-serif",
+                  color: tab === k ? "oklch(0.65 0.20 220)" : "oklch(0.45 0.010 250)",
+                  borderBottom: tab === k ? "2px solid oklch(0.65 0.20 220)" : "2px solid transparent",
+                  background: "transparent",
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* Sektör Filtreleri */}
+          <div className="px-2.5 py-2 border-b flex gap-1.5 overflow-x-auto"
+            style={{ borderColor: "oklch(0.14 0.012 250)" }}>
+            {SECTORS.map((s) => (
+              <button key={s} onClick={() => setSelectedSector(s)}
+                className="px-2 py-1 rounded text-xs whitespace-nowrap flex-shrink-0 transition-all"
+                style={{
+                  background: selectedSector === s ? "oklch(0.65 0.20 220 / 0.18)" : "oklch(0.13 0.015 250)",
+                  border: `1px solid ${selectedSector === s ? "oklch(0.65 0.20 220 / 0.50)" : "oklch(0.20 0.012 250)"}`,
+                  color: selectedSector === s ? "oklch(0.65 0.20 220)" : "oklch(0.50 0.010 250)",
+                  fontFamily: "'Space Grotesk', sans-serif",
+                }}>
+                {s}
+              </button>
+            ))}
+          </div>
+
+          {/* Sütun Başlıkları + Sıralama */}
+          <div className="flex items-center px-3 py-1.5 text-xs border-b"
+            style={{ borderColor: "oklch(0.14 0.012 250)" }}>
+            <span className="flex-1" style={{ color: "oklch(0.45 0.010 250)", fontFamily: "'Space Grotesk', sans-serif" }}>Hisse</span>
+            <div className="flex gap-3">
+              <SortBtn label="Fiyat" k="price" />
+              <SortBtn label="Hacim" k="hacim" />
+              <SortBtn label="%" k="rate" />
+            </div>
+          </div>
+
+          {/* Hisse Satırları */}
+          <div className="flex-1 overflow-y-auto">
+            {loading ? (
+              <div className="flex flex-col items-center justify-center h-32 gap-2">
+                <Activity className="w-5 h-5 animate-pulse" style={{ color: "oklch(0.65 0.20 220)" }} />
+                <span className="text-xs animate-pulse" style={{ color: "oklch(0.40 0.010 250)", fontFamily: "'Space Grotesk', sans-serif" }}>
+                  CollectAPI'den yükleniyor...
+                </span>
               </div>
-              <div className="tv-widget-container" style={{ height: "500px" }}>
-                <TradingViewWidget
-                  scriptSrc="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"
-                  config={{
-                    autosize: true,
-                    symbol: selectedStock,
-                    interval: "D",
-                    timezone: "Europe/Istanbul",
-                    theme: "dark",
-                    style: "1",
-                    locale: "tr",
-                    backgroundColor: "rgba(10, 14, 26, 1)",
-                    gridColor: "rgba(255, 255, 255, 0.04)",
-                    hide_top_toolbar: false,
-                    hide_legend: false,
-                    save_image: false,
-                    calendar: false,
-                    hide_volume: false,
-                    support_host: "https://www.tradingview.com",
+            ) : displayed.length === 0 ? (
+              <div className="flex items-center justify-center h-24">
+                <span className="text-xs" style={{ color: "oklch(0.40 0.010 250)", fontFamily: "'Space Grotesk', sans-serif" }}>
+                  Sonuç bulunamadı
+                </span>
+              </div>
+            ) : displayed.map((s, i) => {
+              const isSelected = s.code === selectedSymbol;
+              return (
+                <div key={s.code}
+                  className="flex items-center px-3 py-2.5 cursor-pointer transition-all duration-100"
+                  style={{
+                    background: isSelected ? "oklch(0.65 0.20 220 / 0.10)" : "transparent",
+                    borderLeft: `2px solid ${isSelected ? "oklch(0.65 0.20 220)" : "transparent"}`,
+                    borderBottom: i < displayed.length - 1 ? "1px solid oklch(0.12 0.012 250)" : "none",
                   }}
-                  height="100%"
-                />
-              </div>
-            </div>
+                  onClick={() => setSelectedSymbol(s.code)}>
+                  {/* Kod + Sektör */}
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold text-xs leading-tight"
+                      style={{ fontFamily: "'Space Grotesk', sans-serif", color: isSelected ? "oklch(0.65 0.20 220)" : "oklch(0.90 0.005 250)" }}>
+                      {s.code}
+                    </div>
+                    <div className="text-xs leading-tight truncate"
+                      style={{ color: "oklch(0.38 0.010 250)", fontFamily: "'Space Grotesk', sans-serif", fontSize: "10px" }}>
+                      {s.sector}
+                    </div>
+                  </div>
+                  {/* Fiyat */}
+                  <div className="font-mono text-xs w-16 text-right"
+                    style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.85 0.005 250)" }}>
+                    ₺{s.lastpricestr}
+                  </div>
+                  {/* Değişim */}
+                  <div className="font-mono text-xs w-16 text-right"
+                    style={{ fontFamily: "'JetBrains Mono', monospace", color: rateColor(s.rate) }}>
+                    {s.rate > 0 ? "+" : ""}{s.rate.toFixed(2)}%
+                  </div>
+                </div>
+              );
+            })}
+          </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <h3 className="text-sm font-semibold mb-2" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "oklch(0.80 0.005 250)" }}>
-                  Teknik Analiz Özeti
-                </h3>
-                <div className="tv-widget-container" style={{ height: "200px" }}>
-                  <TradingViewWidget
-                    scriptSrc="https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js"
-                    config={{
-                      interval: "1D",
-                      width: "100%",
-                      isTransparent: true,
-                      height: "100%",
-                      symbol: selectedStock,
-                      showIntervalTabs: true,
-                      displayMode: "single",
-                      locale: "tr",
-                      colorTheme: "dark",
-                    }}
-                    height="100%"
-                  />
-                </div>
-              </div>
-              <div>
-                <h3 className="text-sm font-semibold mb-2" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "oklch(0.80 0.005 250)" }}>
-                  Hisse Detayları
-                </h3>
-                <div className="tv-widget-container" style={{ height: "200px" }}>
-                  <TradingViewWidget
-                    scriptSrc="https://s3.tradingview.com/external-embedding/embed-widget-symbol-info.js"
-                    config={{
-                      symbol: selectedStock,
-                      width: "100%",
-                      locale: "tr",
-                      colorTheme: "dark",
-                      isTransparent: true,
-                    }}
-                    height="100%"
-                  />
-                </div>
-              </div>
-            </div>
+          {/* Footer: toplam sayı */}
+          <div className="px-3 py-1.5 border-t text-xs flex items-center justify-between"
+            style={{ borderColor: "oklch(0.14 0.012 250)", color: "oklch(0.38 0.010 250)", fontFamily: "'Space Grotesk', sans-serif" }}>
+            <span>{displayed.length} hisse</span>
+            {stocks && <span>{stocks.length} toplam</span>}
           </div>
         </div>
 
-        {/* Altın Fiyatları — CollectAPI */}
-        {gold && gold.length > 0 && (
-          <div className="mt-8">
-            <h2 className="text-lg font-bold mb-4" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "oklch(0.95 0.005 250)" }}>
-              Altın Fiyatları
-            </h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-              {gold.map((item) => {
-                const change = item.change ? parseFloat(item.change) : null;
-                const up = change !== null ? change >= 0 : null;
-                return (
-                  <div
-                    key={item.name}
-                    className="rounded-xl p-3"
-                    style={{ background: "oklch(0.11 0.015 250)", border: "1px solid oklch(0.20 0.012 250)" }}
-                  >
-                    <div className="text-xs mb-2 truncate" style={{ color: "oklch(0.55 0.010 250)", fontFamily: "'Space Grotesk', sans-serif" }}>
-                      {item.name}
-                    </div>
-                    <div className="font-mono text-sm font-bold" style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.75 0.18 55)" }}>
-                      ₺{item.buy}
-                    </div>
-                    <div className="flex items-center justify-between mt-1">
-                      <div className="font-mono text-xs" style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.50 0.010 250)" }}>
-                        S: ₺{item.sell}
-                      </div>
-                      {up !== null && (
-                        <div
-                          className="flex items-center gap-0.5 text-xs font-mono"
-                          style={{ fontFamily: "'JetBrains Mono', monospace", color: up ? "oklch(0.70 0.18 160)" : "oklch(0.60 0.22 25)" }}
-                        >
-                          {up ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                          {up ? "+" : ""}{change!.toFixed(2)}%
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
+        {/* ── Sağ: Seçili Hisse Bilgisi + TradingView Grafik ─────────────── */}
+        <div className="flex flex-col flex-1 min-w-0">
 
-        {/* BIST Screener Widget */}
-        <div className="mt-8">
-          <h2 className="text-lg font-bold mb-4" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "oklch(0.95 0.005 250)" }}>
-            BIST Hisse Tarayıcı
-          </h2>
-          <div className="tv-widget-container" style={{ height: "500px" }}>
+          {/* Seçili Hisse Özeti */}
+          <div className="flex-shrink-0 px-5 py-3 border-b flex flex-wrap items-center gap-x-6 gap-y-2"
+            style={{ borderColor: "oklch(0.18 0.012 250)", background: "oklch(0.10 0.015 250)" }}>
+            {selectedStock ? (
+              <>
+                {/* Kod + Şirket Adı */}
+                <div>
+                  <div className="flex items-baseline gap-2.5">
+                    <span className="text-2xl font-bold"
+                      style={{ fontFamily: "'Space Grotesk', sans-serif", color: "oklch(0.95 0.005 250)" }}>
+                      {selectedStock.code}
+                    </span>
+                    <span className="px-2 py-0.5 rounded text-xs font-medium"
+                      style={{ background: "oklch(0.65 0.20 220 / 0.12)", color: "oklch(0.65 0.20 220)", fontFamily: "'Space Grotesk', sans-serif" }}>
+                      {selectedStock.sector}
+                    </span>
+                  </div>
+                  <div className="text-xs mt-0.5 max-w-xs truncate"
+                    style={{ color: "oklch(0.45 0.010 250)", fontFamily: "'Space Grotesk', sans-serif" }}>
+                    {selectedStock.text}
+                  </div>
+                </div>
+
+                {/* Anlık Fiyat + Değişim */}
+                <div className="flex items-baseline gap-3">
+                  <span className="text-3xl font-bold"
+                    style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.95 0.005 250)" }}>
+                    ₺{selectedStock.lastpricestr}
+                  </span>
+                  <span className="flex items-center gap-0.5 text-xl font-mono font-bold"
+                    style={{ fontFamily: "'JetBrains Mono', monospace", color: rateColor(selectedStock.rate) }}>
+                    {selectedStock.rate > 0 ? <ChevronUp className="w-5 h-5" /> : selectedStock.rate < 0 ? <ChevronDown className="w-5 h-5" /> : null}
+                    {selectedStock.rate > 0 ? "+" : ""}{selectedStock.rate.toFixed(2)}%
+                  </span>
+                </div>
+
+                {/* Ek metrikler */}
+                <div className="flex gap-5 ml-auto flex-wrap">
+                  {[
+                    { label: "Hacim", value: selectedStock.hacimstr },
+                    { label: "BIST:Sembol", value: `BIST:${selectedStock.code}` },
+                  ].map(({ label, value }) => (
+                    <div key={label}>
+                      <div className="text-xs" style={{ color: "oklch(0.40 0.010 250)", fontFamily: "'Space Grotesk', sans-serif" }}>{label}</div>
+                      <div className="font-mono text-sm"
+                        style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.80 0.005 250)" }}>
+                        {value}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Activity className="w-4 h-4 animate-pulse" style={{ color: "oklch(0.65 0.20 220)" }} />
+                <span className="text-sm" style={{ color: "oklch(0.45 0.010 250)", fontFamily: "'Space Grotesk', sans-serif" }}>
+                  Hisse seçin
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* TradingView Grafik — Kalan alanı doldurur */}
+          <div className="flex-1 min-h-0">
             <TradingViewWidget
-              scriptSrc="https://s3.tradingview.com/external-embedding/embed-widget-screener.js"
+              key={selectedSymbol}
+              scriptSrc="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"
               config={{
-                width: "100%",
-                height: "100%",
-                defaultColumn: "overview",
-                defaultScreen: "most_capitalized",
-                market: "turkey",
-                showToolbar: true,
-                colorTheme: "dark",
+                autosize: true,
+                symbol: `BIST:${selectedSymbol}`,
+                interval: "D",
+                timezone: "Europe/Istanbul",
+                theme: "dark",
+                style: "1",
                 locale: "tr",
-                isTransparent: true,
+                backgroundColor: "rgba(13, 17, 30, 1)",
+                gridColor: "rgba(255, 255, 255, 0.03)",
+                hide_top_toolbar: false,
+                hide_legend: false,
+                save_image: false,
+                calendar: false,
+                hide_volume: false,
+                support_host: "https://www.tradingview.com",
               }}
               height="100%"
             />
