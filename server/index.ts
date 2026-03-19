@@ -9,6 +9,64 @@ const __dirname = path.dirname(__filename);
 const COLLECTAPI_KEY = process.env.COLLECTAPI_KEY || "";
 const COLLECTAPI_BASE = "https://api.collectapi.com/economy";
 
+// Yahoo Finance üzerinden BIST hisse fallback (CollectAPI yoksa)
+const BIST_SYMBOLS = [
+  "THYAO","GARAN","ASELS","EREGL","KCHOL","SISE","AKBNK","YKBNK","TUPRS","BIMAS",
+  "FROTO","TOASO","PETKM","PGSUS","VESTL","KOZAL","TCELL","ENKAI","SAHOL","ISCTR",
+  "ARCLK","KOZAA","MGROS","EKGYO","AEFES","TTKOM","DOHOL","HEKTS","ODAS","OYAKC",
+  "TAVHL","SASA","TKFEN","BRISA","GUBRF","ULKER","CCOLA","KORDS","BAGFS","ANACM",
+];
+
+function fmtHacim(v: number): string {
+  if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(2)}B`;
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(2)}K`;
+  return String(v);
+}
+
+async function fetchStocksFromYahoo() {
+  const ySymbols = BIST_SYMBOLS.map((s) => `${s}.IS`).join(",");
+  const url = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${ySymbols}&lang=tr&region=TR`;
+  const resp = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+  if (!resp.ok) throw new Error(`Yahoo Finance error: ${resp.status}`);
+  const json = await resp.json();
+  const quotes: any[] = json?.quoteResponse?.result ?? [];
+  const result = quotes.map((q) => ({
+    code: String(q.symbol).replace(".IS", ""),
+    text: q.longName || q.shortName || q.symbol,
+    lastprice: q.regularMarketPrice ?? 0,
+    lastpricestr: (q.regularMarketPrice ?? 0).toFixed(2),
+    rate: q.regularMarketChangePercent ?? 0,
+    hacim: q.regularMarketVolume ?? 0,
+    hacimstr: fmtHacim(q.regularMarketVolume ?? 0),
+  }));
+  return { success: true, result };
+}
+
+async function fetchBistFromYahoo() {
+  const url = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=XU100.IS&lang=tr&region=TR`;
+  const resp = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+  if (!resp.ok) throw new Error(`Yahoo Finance BIST error: ${resp.status}`);
+  const json = await resp.json();
+  const q = json?.quoteResponse?.result?.[0];
+  if (!q) throw new Error("No BIST data");
+  const current = q.regularMarketPrice ?? 0;
+  const changerate = q.regularMarketChangePercent ?? 0;
+  return {
+    success: true,
+    result: {
+      current,
+      currentstr: current.toLocaleString("tr-TR", { maximumFractionDigits: 2 }),
+      changerate,
+      changeratestr: Math.abs(changerate).toFixed(2),
+      min: q.regularMarketDayLow ?? 0,
+      minstr: (q.regularMarketDayLow ?? 0).toLocaleString("tr-TR", { maximumFractionDigits: 2 }),
+      max: q.regularMarketDayHigh ?? 0,
+      maxstr: (q.regularMarketDayHigh ?? 0).toLocaleString("tr-TR", { maximumFractionDigits: 2 }),
+    },
+  };
+}
+
 async function collectApiFetch(endpoint: string) {
   const res = await fetch(`${COLLECTAPI_BASE}${endpoint}`, {
     headers: {
@@ -138,8 +196,14 @@ async function startServer() {
   });
 
   app.get("/api/stocks", async (_req, res) => {
+    if (COLLECTAPI_KEY) {
+      try {
+        const data = await collectApiFetch("/hisseSenedi");
+        return res.json(data);
+      } catch { /* fallback'e düş */ }
+    }
     try {
-      const data = await collectApiFetch("/hisseSenedi");
+      const data = await fetchStocksFromYahoo();
       res.json(data);
     } catch (err) {
       res.status(500).json({ success: false, error: String(err) });
@@ -147,8 +211,14 @@ async function startServer() {
   });
 
   app.get("/api/bist", async (_req, res) => {
+    if (COLLECTAPI_KEY) {
+      try {
+        const data = await collectApiFetch("/borsaIstanbul");
+        return res.json(data);
+      } catch { /* fallback'e düş */ }
+    }
     try {
-      const data = await collectApiFetch("/borsaIstanbul");
+      const data = await fetchBistFromYahoo();
       res.json(data);
     } catch (err) {
       res.status(500).json({ success: false, error: String(err) });

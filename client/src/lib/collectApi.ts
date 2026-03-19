@@ -77,6 +77,70 @@ async function fetchGoldFromCdn(): Promise<GoldItem[] | null> {
   }
 }
 
+// Yahoo Finance'den BIST hisse verisi (tarayıcı fallback)
+const BIST_YF_SYMBOLS = [
+  "THYAO","GARAN","ASELS","EREGL","KCHOL","SISE","AKBNK","YKBNK","TUPRS","BIMAS",
+  "FROTO","TOASO","PETKM","PGSUS","VESTL","KOZAL","TCELL","ENKAI","SAHOL","ISCTR",
+  "ARCLK","KOZAA","MGROS","EKGYO","AEFES","TTKOM","DOHOL","HEKTS","ODAS","OYAKC",
+  "TAVHL","SASA","TKFEN","BRISA","GUBRF","ULKER","CCOLA","KORDS","BAGFS","ANACM",
+];
+
+function fmtHacim(v: number): string {
+  if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(2)}B`;
+  if (v >= 1_000_000)     return `${(v / 1_000_000).toFixed(2)}M`;
+  if (v >= 1_000)         return `${(v / 1_000).toFixed(2)}K`;
+  return String(v);
+}
+
+async function fetchStocksFromYahoo(): Promise<StockItem[] | null> {
+  try {
+    const syms = BIST_YF_SYMBOLS.map((s) => `${s}.IS`).join(",");
+    // corsproxy.io üzerinden CORS sorunu aşılır
+    const target = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${syms}&lang=tr&region=TR`;
+    const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(target)}`);
+    if (!res.ok) return null;
+    const json = await res.json();
+    const quotes: any[] = json?.quoteResponse?.result ?? [];
+    if (quotes.length === 0) return null;
+    return quotes.map((q) => ({
+      code: String(q.symbol).replace(".IS", ""),
+      text: q.longName || q.shortName || q.symbol,
+      lastprice: q.regularMarketPrice ?? 0,
+      lastpricestr: (q.regularMarketPrice ?? 0).toFixed(2),
+      rate: q.regularMarketChangePercent ?? 0,
+      hacim: q.regularMarketVolume ?? 0,
+      hacimstr: fmtHacim(q.regularMarketVolume ?? 0),
+    }));
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBistFromYahoo(): Promise<BistIndex | null> {
+  try {
+    const target = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=XU100.IS&lang=tr&region=TR`;
+    const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(target)}`);
+    if (!res.ok) return null;
+    const json = await res.json();
+    const q = json?.quoteResponse?.result?.[0];
+    if (!q) return null;
+    const current = q.regularMarketPrice ?? 0;
+    const changerate = q.regularMarketChangePercent ?? 0;
+    return {
+      current,
+      currentstr: current.toLocaleString("tr-TR", { maximumFractionDigits: 2 }),
+      changerate,
+      changeratestr: Math.abs(changerate).toFixed(2),
+      min: q.regularMarketDayLow ?? 0,
+      minstr: (q.regularMarketDayLow ?? 0).toLocaleString("tr-TR", { maximumFractionDigits: 2 }),
+      max: q.regularMarketDayHigh ?? 0,
+      maxstr: (q.regularMarketDayHigh ?? 0).toLocaleString("tr-TR", { maximumFractionDigits: 2 }),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export const fetchCurrency = () => apiFetch<CurrencyItem[]>("/api/currency");
 
 // Önce sunucu (CollectAPI), başarısız olursa ücretsiz CDN
@@ -86,5 +150,16 @@ export const fetchGold = async (): Promise<GoldItem[] | null> => {
   return fetchGoldFromCdn();
 };
 
-export const fetchStocks = () => apiFetch<StockItem[]>("/api/stocks");
-export const fetchBist = () => apiFetch<BistIndex>("/api/bist");
+// Önce sunucu (CollectAPI → Yahoo Finance), başarısız olursa tarayıcıdan Yahoo Finance
+export const fetchStocks = async (): Promise<StockItem[] | null> => {
+  const fromServer = await apiFetch<StockItem[]>("/api/stocks");
+  if (fromServer) return fromServer;
+  return fetchStocksFromYahoo();
+};
+
+// Önce sunucu, başarısız olursa tarayıcıdan Yahoo Finance
+export const fetchBist = async (): Promise<BistIndex | null> => {
+  const fromServer = await apiFetch<BistIndex>("/api/bist");
+  if (fromServer) return fromServer;
+  return fetchBistFromYahoo();
+};
