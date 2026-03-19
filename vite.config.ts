@@ -3,7 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import fs from "node:fs";
 import path from "node:path";
-import { defineConfig, type Plugin, type ViteDevServer } from "vite";
+import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from "vite";
 import { vitePluginManusRuntime } from "vite-plugin-manus-runtime";
 
 // =============================================================================
@@ -150,12 +150,53 @@ function vitePluginManusDebugCollector(): Plugin {
   };
 }
 
+// =============================================================================
+// CollectAPI Dev Proxy - /api/* isteklerini CollectAPI'ye yönlendirir
+// =============================================================================
+function vitePluginCollectApiProxy(): Plugin {
+  return {
+    name: "collectapi-proxy",
+    configureServer(server: ViteDevServer) {
+      const env = loadEnv("development", process.cwd(), "");
+      const COLLECTAPI_KEY = env.COLLECTAPI_KEY || process.env.COLLECTAPI_KEY || "";
+      const COLLECTAPI_BASE = "https://api.collectapi.com/economy";
+
+      const ROUTES: Record<string, string> = {
+        "/api/currency": "/allCurrency",
+        "/api/gold": "/goldPrice",
+        "/api/stocks": "/hisseSenedi",
+        "/api/bist": "/borsaIstanbul",
+      };
+
+      server.middlewares.use(async (req, res, next) => {
+        const endpoint = ROUTES[req.url?.split("?")[0] ?? ""];
+        if (!endpoint) return next();
+
+        try {
+          const upstream = await fetch(`${COLLECTAPI_BASE}${endpoint}`, {
+            headers: {
+              authorization: `apikey ${COLLECTAPI_KEY}`,
+              "content-type": "application/json",
+            },
+          });
+          const data = await upstream.json();
+          res.writeHead(upstream.status, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(data));
+        } catch (err) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: false, error: String(err) }));
+        }
+      });
+    },
+  };
+}
+
 const isDev = process.env.NODE_ENV !== "production";
 
 const plugins = [
   react(),
   tailwindcss(),
-  ...(isDev ? [jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()] : []),
+  ...(isDev ? [jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector(), vitePluginCollectApiProxy()] : []),
 ];
 
 export default defineConfig({
