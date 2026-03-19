@@ -1,10 +1,10 @@
 /**
  * BIST Doktoru - Piyasa Analizi Sayfası
- * CollectAPI döviz & altın verileri + TradingView grafikleri
+ * TCMB resmi döviz + CollectAPI altın verileri + TradingView grafikleri
  */
-import { TrendingUp, Globe, BarChart2, DollarSign } from "lucide-react";
+import { TrendingUp, Globe, BarChart2, DollarSign, Landmark } from "lucide-react";
 import TradingViewWidget from "@/components/TradingViewWidget";
-import { useCurrency, useGold } from "@/hooks/useMarketData";
+import { useGold, useTcmbRates } from "@/hooks/useMarketData";
 
 const GLOBAL_MARKETS_CONFIG = {
   colorTheme: "dark",
@@ -53,38 +53,50 @@ const GLOBAL_MARKETS_CONFIG = {
   ],
 };
 
-// CollectAPI döviz tablosu
+// TCMB resmi döviz kurları tablosu
+const TCMB_WANTED = ["USD", "EUR", "GBP", "CHF", "JPY", "AUD", "CAD", "SAR", "SEK", "NOK", "DKK"];
+
+const CURRENCY_FLAGS: Record<string, string> = {
+  USD: "🇺🇸", EUR: "🇪🇺", GBP: "🇬🇧", CHF: "🇨🇭", JPY: "🇯🇵",
+  AUD: "🇦🇺", CAD: "🇨🇦", SAR: "🇸🇦", SEK: "🇸🇪", NOK: "🇳🇴", DKK: "🇩🇰",
+};
+
 function CurrencyTable() {
-  const { data: currency, loading } = useCurrency();
+  const { data: rates, loading } = useTcmbRates();
 
-  // Gösterilecek dövizler
-  const wanted = ["USD", "EUR", "GBP", "CHF", "JPY", "SAR", "AUD", "CAD", "DKK", "SEK", "NOK"];
-
-  const filtered = currency
-    ? currency.filter((c) => wanted.some((code) => c.name.startsWith(code) || c.name.includes(code + " ")))
+  const filtered = rates
+    ? rates.filter((r) => TCMB_WANTED.includes(r.code))
     : [];
 
   return (
     <div>
       <h2 className="text-lg font-bold mb-4 flex items-center gap-2" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "oklch(0.95 0.005 250)" }}>
-        <DollarSign className="w-5 h-5" style={{ color: "oklch(0.65 0.20 220)" }} />
+        <Landmark className="w-5 h-5" style={{ color: "oklch(0.65 0.20 220)" }} />
         Döviz Kurları
-        <span className="text-xs font-normal ml-1 px-2 py-0.5 rounded-full" style={{ background: "oklch(0.70 0.18 160 / 0.12)", color: "oklch(0.70 0.18 160)", fontFamily: "'JetBrains Mono', monospace" }}>
-          Canlı
+        <span className="text-xs font-normal ml-1 px-2 py-0.5 rounded-full" style={{ background: "oklch(0.65 0.20 220 / 0.12)", color: "oklch(0.65 0.20 220)", fontFamily: "'JetBrains Mono', monospace" }}>
+          TCMB Resmi
         </span>
       </h2>
       <div className="rounded-xl overflow-hidden" style={{ border: "1px solid oklch(0.20 0.012 250)" }}>
         <div
-          className="grid grid-cols-3 px-5 py-3 text-xs font-semibold"
-          style={{ background: "oklch(0.13 0.015 250)", borderBottom: "1px solid oklch(0.20 0.012 250)", color: "oklch(0.55 0.010 250)", fontFamily: "'Space Grotesk', sans-serif" }}
+          className="grid px-5 py-3 text-xs font-semibold"
+          style={{
+            gridTemplateColumns: "1.5fr 1fr 1fr 1fr 1fr",
+            background: "oklch(0.13 0.015 250)",
+            borderBottom: "1px solid oklch(0.20 0.012 250)",
+            color: "oklch(0.55 0.010 250)",
+            fontFamily: "'Space Grotesk', sans-serif",
+          }}
         >
           <span>Para Birimi</span>
-          <span className="text-right">Alış (₺)</span>
-          <span className="text-right">Satış (₺)</span>
+          <span className="text-right">Döviz Alış</span>
+          <span className="text-right">Döviz Satış</span>
+          <span className="text-right">Banknot Alış</span>
+          <span className="text-right">Banknot Satış</span>
         </div>
         {loading && (
           <div className="px-5 py-6 text-center">
-            <span className="text-xs animate-pulse" style={{ color: "oklch(0.50 0.010 250)" }}>Döviz verileri yükleniyor...</span>
+            <span className="text-xs animate-pulse" style={{ color: "oklch(0.50 0.010 250)" }}>TCMB verileri yükleniyor...</span>
           </div>
         )}
         {!loading && filtered.length === 0 && (
@@ -94,24 +106,47 @@ function CurrencyTable() {
         )}
         {filtered.map((item, i) => (
           <div
-            key={item.name}
-            className="grid grid-cols-3 px-5 py-3"
+            key={item.code}
+            className="grid items-center px-5 py-3"
             style={{
+              gridTemplateColumns: "1.5fr 1fr 1fr 1fr 1fr",
               borderBottom: i < filtered.length - 1 ? "1px solid oklch(0.15 0.012 250)" : "none",
               background: i % 2 === 0 ? "oklch(0.11 0.015 250)" : "oklch(0.105 0.015 250)",
             }}
           >
-            <span className="text-sm" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "oklch(0.85 0.005 250)" }}>
-              {item.name}
-            </span>
+            <div className="flex items-center gap-2">
+              <span>{CURRENCY_FLAGS[item.code] ?? "🏳️"}</span>
+              <div>
+                <div className="text-sm font-bold" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "oklch(0.90 0.005 250)" }}>
+                  {item.code}
+                </div>
+                <div className="text-xs" style={{ color: "oklch(0.50 0.010 250)" }}>
+                  {item.unit > 1 ? `${item.unit} birim` : item.name.split(" ").slice(0, 2).join(" ")}
+                </div>
+              </div>
+            </div>
             <span className="text-right font-mono text-sm" style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.80 0.005 250)" }}>
-              {item.buying}
+              {item.forexBuying || "—"}
             </span>
-            <span className="text-right font-mono text-sm" style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.90 0.005 250)" }}>
-              {item.selling}
+            <span className="text-right font-mono text-sm font-bold" style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.92 0.005 250)" }}>
+              {item.forexSelling || "—"}
+            </span>
+            <span className="text-right font-mono text-sm" style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.75 0.005 250)" }}>
+              {item.banknoteBuying || "—"}
+            </span>
+            <span className="text-right font-mono text-sm" style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.75 0.005 250)" }}>
+              {item.banknoteSelling || "—"}
             </span>
           </div>
         ))}
+        {!loading && filtered.length > 0 && (
+          <div
+            className="px-5 py-2 text-xs"
+            style={{ background: "oklch(0.09 0.015 250)", borderTop: "1px solid oklch(0.17 0.012 250)", color: "oklch(0.45 0.010 250)", fontFamily: "'Space Grotesk', sans-serif" }}
+          >
+            Kaynak: T.C. Merkez Bankası (TCMB) · Günlük güncelleme
+          </div>
+        )}
       </div>
     </div>
   );

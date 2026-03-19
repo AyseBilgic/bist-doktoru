@@ -20,6 +20,45 @@ async function collectApiFetch(endpoint: string) {
   return res.json();
 }
 
+// TCMB XML'ini parse ederek döviz listesi döndürür
+function parseTcmbXml(xml: string) {
+  const currencies: {
+    code: string;
+    name: string;
+    unit: number;
+    forexBuying: string;
+    forexSelling: string;
+    banknoteBuying: string;
+    banknoteSelling: string;
+  }[] = [];
+
+  const currencyBlocks = xml.match(/<Currency[^>]*CurrencyCode="(\w+)"[^>]*>([\s\S]*?)<\/Currency>/g) || [];
+
+  for (const block of currencyBlocks) {
+    const codeMatch = block.match(/CurrencyCode="(\w+)"/);
+    const unitMatch = block.match(/<Unit>(\d+)<\/Unit>/);
+    const nameMatch = block.match(/<Isim>([^<]+)<\/Isim>/);
+    const forexBuyingMatch = block.match(/<ForexBuying>([^<]+)<\/ForexBuying>/);
+    const forexSellingMatch = block.match(/<ForexSelling>([^<]+)<\/ForexSelling>/);
+    const banknoteBuyingMatch = block.match(/<BanknoteBuying>([^<]+)<\/BanknoteBuying>/);
+    const banknoteSellingMatch = block.match(/<BanknoteSelling>([^<]+)<\/BanknoteSelling>/);
+
+    if (!codeMatch || !forexBuyingMatch || !forexSellingMatch) continue;
+
+    currencies.push({
+      code: codeMatch[1],
+      name: nameMatch ? nameMatch[1] : codeMatch[1],
+      unit: unitMatch ? parseInt(unitMatch[1]) : 1,
+      forexBuying: forexBuyingMatch[1],
+      forexSelling: forexSellingMatch[1],
+      banknoteBuying: banknoteBuyingMatch ? banknoteBuyingMatch[1] : "",
+      banknoteSelling: banknoteSellingMatch ? banknoteSellingMatch[1] : "",
+    });
+  }
+
+  return currencies;
+}
+
 async function startServer() {
   const app = express();
   const server = createServer(app);
@@ -58,6 +97,36 @@ async function startServer() {
     try {
       const data = await collectApiFetch("/borsaIstanbul");
       res.json(data);
+    } catch (err) {
+      res.status(500).json({ success: false, error: String(err) });
+    }
+  });
+
+  // TCMB resmi döviz kurları (XML → JSON)
+  app.get("/api/tcmb", async (_req, res) => {
+    try {
+      const response = await fetch("https://www.tcmb.gov.tr/kurlar/today.xml", {
+        headers: { "User-Agent": "Mozilla/5.0" },
+      });
+      if (!response.ok) throw new Error(`TCMB error: ${response.status}`);
+      const xml = await response.text();
+      const currencies = parseTcmbXml(xml);
+      res.json({ success: true, result: currencies });
+    } catch (err) {
+      res.status(500).json({ success: false, error: String(err) });
+    }
+  });
+
+  // Binance 24h ticker verileri
+  app.get("/api/binance", async (_req, res) => {
+    try {
+      const symbols = encodeURIComponent(
+        '["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT","DOGEUSDT","AVAXUSDT","DOTUSDT","LINKUSDT","LTCUSDT","UNIUSDT"]'
+      );
+      const response = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${symbols}`);
+      if (!response.ok) throw new Error(`Binance error: ${response.status}`);
+      const data = await response.json();
+      res.json({ success: true, result: data });
     } catch (err) {
       res.status(500).json({ success: false, error: String(err) });
     }

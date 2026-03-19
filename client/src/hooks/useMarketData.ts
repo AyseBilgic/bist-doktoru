@@ -9,6 +9,8 @@ import {
   type StockItem,
   type BistIndex,
 } from "@/lib/collectApi";
+import { fetchBinanceTickers, type BinanceTicker } from "@/lib/binanceApi";
+import { fetchTcmbRates, type TcmbRate } from "@/lib/tcmbApi";
 
 const REFRESH_INTERVAL = 60_000; // 1 dakika
 
@@ -52,4 +54,12 @@ export function useStocks() {
 
 export function useBist() {
   return usePolling<BistIndex>(fetchBist);
+}
+
+export function useBinanceTickers() {
+  return usePolling<BinanceTicker[]>(fetchBinanceTickers, 30_000); // 30 saniye
+}
+
+export function useTcmbRates() {
+  return usePolling<TcmbRate[]>(fetchTcmbRates, 3_600_000); // 1 saat
 }
