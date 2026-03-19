@@ -2,10 +2,10 @@
  * BIST Doktoru - BIST Hisse Senetleri Sayfası
  * CollectAPI canlı hisse verileri + TradingView grafikleri
  */
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { BarChart2, ChevronUp, ChevronDown } from "lucide-react";
 import TradingViewWidget from "@/components/TradingViewWidget";
-import { useStocks, useBist } from "@/hooks/useMarketData";
+import { useStocks, useBist, useGold } from "@/hooks/useMarketData";
 
 // Sektör eşleştirme (CollectAPI sadece kod verir, sektörü text'ten tahmin ederiz)
 const SECTOR_KEYWORDS: Record<string, string> = {
@@ -37,6 +37,7 @@ export default function BistPage() {
 
   const { data: stocks, loading } = useStocks();
   const { data: bist } = useBist();
+  const { data: gold } = useGold();
 
   const enrichedStocks = useMemo(() => {
     if (!stocks) return [];
@@ -52,6 +53,14 @@ export default function BistPage() {
       return matchSector;
     });
   }, [enrichedStocks, selectedSector]);
+
+  // Sektör filtresi değişince ilk hisseyi TradingView'a yansıt
+  useEffect(() => {
+    if (filteredStocks.length > 0) {
+      setSelectedStock(`BIST:${filteredStocks[0].code}`);
+      setSelectedSymbol(filteredStocks[0].code);
+    }
+  }, [selectedSector]);
 
   return (
     <div className="min-h-screen">
@@ -286,6 +295,49 @@ export default function BistPage() {
             </div>
           </div>
         </div>
+
+        {/* Altın Fiyatları — CollectAPI */}
+        {gold && gold.length > 0 && (
+          <div className="mt-8">
+            <h2 className="text-lg font-bold mb-4" style={{ fontFamily: "'Space Grotesk', sans-serif", color: "oklch(0.95 0.005 250)" }}>
+              Altın Fiyatları
+            </h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+              {gold.map((item) => {
+                const change = item.change ? parseFloat(item.change) : null;
+                const up = change !== null ? change >= 0 : null;
+                return (
+                  <div
+                    key={item.name}
+                    className="rounded-xl p-3"
+                    style={{ background: "oklch(0.11 0.015 250)", border: "1px solid oklch(0.20 0.012 250)" }}
+                  >
+                    <div className="text-xs mb-2 truncate" style={{ color: "oklch(0.55 0.010 250)", fontFamily: "'Space Grotesk', sans-serif" }}>
+                      {item.name}
+                    </div>
+                    <div className="font-mono text-sm font-bold" style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.75 0.18 55)" }}>
+                      ₺{item.buy}
+                    </div>
+                    <div className="flex items-center justify-between mt-1">
+                      <div className="font-mono text-xs" style={{ fontFamily: "'JetBrains Mono', monospace", color: "oklch(0.50 0.010 250)" }}>
+                        S: ₺{item.sell}
+                      </div>
+                      {up !== null && (
+                        <div
+                          className="flex items-center gap-0.5 text-xs font-mono"
+                          style={{ fontFamily: "'JetBrains Mono', monospace", color: up ? "oklch(0.70 0.18 160)" : "oklch(0.60 0.22 25)" }}
+                        >
+                          {up ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                          {up ? "+" : ""}{change!.toFixed(2)}%
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* BIST Screener Widget */}
         <div className="mt-8">
