@@ -18,7 +18,7 @@ import {
   ChevronUp,
   ChevronDown,
 } from "lucide-react";
-import { useCurrency, useGold, useBist } from "@/hooks/useMarketData";
+import { useCurrency, useGold, useBist, useStocks, useTcmbRates } from "@/hooks/useMarketData";
 
 // BIST saatleri: Pazartesi-Cuma 10:00-18:00 (Türkiye saati UTC+3)
 function isBistOpen(now: Date): boolean {
@@ -38,23 +38,22 @@ const NAV_ITEMS = [
   { href: "/hakkimizda", label: "Hakkımızda", icon: Info },
 ];
 
-// Döviz kodunu kısa ada çevir
-function currencyShortName(name: string): string {
-  if (name.includes("USD")) return "USD/TRY";
-  if (name.includes("EUR") && !name.includes("USD")) return "EUR/TRY";
-  if (name.includes("GBP")) return "GBP/TRY";
-  if (name.includes("CHF")) return "CHF/TRY";
-  return name.split(" ")[0];
-}
+// Tüm dövizler ticker için
+const TICKER_CURRENCIES = ["USD", "EUR", "GBP", "CHF", "JPY", "AUD", "CAD", "SAR"];
+
+// Tickerde gösterilecek top hisseler
+const TOP_STOCKS = ["THYAO", "GARAN", "ASELS", "EREGL", "KCHOL", "SISE", "AKBNK", "YKBNK", "TUPRS", "BIMAS"];
 
 function TickerStrip() {
   const { data: currency } = useCurrency();
+  const { data: tcmb } = useTcmbRates();   // CollectAPI yoksa TCMB fallback
   const { data: gold } = useGold();
   const { data: bist } = useBist();
+  const { data: stocks } = useStocks();
 
-  // Gösterilecek veriler
   const items: { label: string; value: string; change?: string; up?: boolean }[] = [];
 
+  // BIST 100 endeksi
   if (bist) {
     items.push({
       label: "BIST 100",
@@ -64,26 +63,44 @@ function TickerStrip() {
     });
   }
 
-  if (currency) {
-    const wanted = ["USD", "EUR", "GBP"];
-    wanted.forEach((code) => {
-      const item = currency.find((c) => c.name.includes(code) && !c.name.includes("USD") === (code !== "USD"));
-      const found = currency.find((c) => c.name.startsWith(code) || c.name.includes(code + " "));
-      const entry = found || item;
+  // Dövizler — CollectAPI varsa onu kullan, yoksa TCMB CDN
+  TICKER_CURRENCIES.forEach((code) => {
+    if (currency) {
+      const entry = currency.find((c) => c.name.startsWith(code) || c.name.includes(code + " "));
       if (entry) {
-        items.push({
-          label: currencyShortName(entry.name),
-          value: `₺${entry.selling}`,
-        });
+        items.push({ label: `${code}/TRY`, value: `₺${Number(entry.selling).toFixed(2)}` });
+        return;
       }
-    });
-  }
+    }
+    if (tcmb) {
+      const entry = tcmb.find((r) => r.code === code);
+      if (entry) {
+        items.push({ label: `${code}/TRY`, value: `₺${Number(entry.forexSelling).toFixed(2)}` });
+      }
+    }
+  });
 
+  // Gram Altın
   if (gold) {
     const gramAltin = gold.find((g) => g.name === "Gram Altın" || g.name.includes("Gram"));
     if (gramAltin) {
-      items.push({ label: "Gram Altın", value: `₺${gramAltin.buy}` });
+      items.push({ label: "ALTIN", value: `₺${Number(gramAltin.buy).toFixed(2)}` });
     }
+  }
+
+  // Top hisse senetleri — fiyat + % değişim
+  if (stocks) {
+    TOP_STOCKS.forEach((code) => {
+      const s = stocks.find((st) => st.code === code);
+      if (s) {
+        items.push({
+          label: s.code,
+          value: `₺${s.lastpricestr}`,
+          change: `${s.rate >= 0 ? "+" : ""}${s.rate.toFixed(2)}%`,
+          up: s.rate >= 0,
+        });
+      }
+    });
   }
 
   // Veriler yüklenene kadar boş şerit
