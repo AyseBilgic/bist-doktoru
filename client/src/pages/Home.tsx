@@ -6,7 +6,7 @@
 import { Link } from "wouter";
 import { BarChart2, Bitcoin, TrendingUp, Briefcase, ArrowRight, ChevronUp, ChevronDown, Activity, Globe, Shield } from "lucide-react";
 import TradingViewWidget from "@/components/TradingViewWidget";
-import { useBist, useCurrency, useGold, useStocks } from "@/hooks/useMarketData";
+import { useBist, useCurrency, useGold, useStocks, useBinanceTickers } from "@/hooks/useMarketData";
 
 const HERO_BG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663451065819/YKtmvmmBUBqBDrsdHYiG7Z/bist-hero-bg-LsVfhNx7F8B9CqqXsiAa2d.webp";
 const MARKET_IMG = "https://d2xsxph8kpxj0f.cloudfront.net/310519663451065819/YKtmvmmBUBqBDrsdHYiG7Z/bist-market-visual-R2ZKH2cYjNP574MuX5jRKj.webp";
@@ -105,6 +105,7 @@ function MarketStatsBar() {
   const { data: bist } = useBist();
   const { data: currency } = useCurrency();
   const { data: gold } = useGold();
+  const { data: binance } = useBinanceTickers();
 
   const stats: { label: string; value: string; change?: string; up?: boolean; sub: string }[] = [];
 
@@ -130,6 +131,21 @@ function MarketStatsBar() {
     const ceyrek = gold.find((g) => g.name.includes("Çeyrek"));
     if (gram) stats.push({ label: "GRAM ALTIN", value: `₺${gram.buy}`, sub: "Gram Altın" });
     if (ceyrek) stats.push({ label: "ÇEYREK", value: `₺${ceyrek.buy}`, sub: "Çeyrek Altın" });
+  }
+
+  if (binance) {
+    const btc = binance.find((t) => t.symbol === "BTCUSDT");
+    const eth = binance.find((t) => t.symbol === "ETHUSDT");
+    if (btc) {
+      const pct = parseFloat(btc.priceChangePercent);
+      const price = parseFloat(btc.lastPrice).toLocaleString("en-US", { maximumFractionDigits: 0 });
+      stats.push({ label: "BTC/USD", value: `$${price}`, change: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`, up: pct >= 0, sub: "Bitcoin" });
+    }
+    if (eth) {
+      const pct = parseFloat(eth.priceChangePercent);
+      const price = parseFloat(eth.lastPrice).toLocaleString("en-US", { maximumFractionDigits: 0 });
+      stats.push({ label: "ETH/USD", value: `$${price}`, change: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`, up: pct >= 0, sub: "Ethereum" });
+    }
   }
 
   if (stats.length === 0) return null;
